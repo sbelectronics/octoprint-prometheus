@@ -87,20 +87,21 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                 elif event == "PrintStarted":
                     # reset the extrusion counter
                     self.parser.reset()
-                    self.get_gauge("printing").set(1)
+                    self.last_extrusion_counter = 0
+                    self.get_gauge("printing").set(1)  # TODO: may be redundant with printer_state
                     self.get_gauge("printer_state").state("printing")
                     self.get_info("print_info").info({"name": payload.get("name", ""),
                                                       "path": payload.get("path", ""),
                                                       "origin": payload.get("origin", "")})
                 elif event == "PrintFailed":
-                    self.get_gauge("printing").set(0)
-                    self.get_gague("printer_state").state("failed")
+                    self.get_gauge("printing").set(0)  # TODO: may be redundant with printer_state
+                    self.get_gauge("printer_state").state("failed")
                 elif event == "PrintDone":
-                    self.get_gauge("printing").set(0)
-                    self.get_gague("printer_state").state("done")
+                    self.get_gauge("printing").set(0)  # TODO: may be redundant with printer_state
+                    self.get_gauge("printer_state").state("done")
                 elif event == "PrintCancelled":
-                    self.get_gauge("printing").set(0)
-                    self.get_gague("printer_state").state("cancelled")
+                    self.get_gauge("printing").set(0)  # TODO: may be redundant with printer_state
+                    self.get_gauge("printer_state").state("cancelled")
 
                 """
                 # This was my first attempt at measuring positions and extrusions. 
