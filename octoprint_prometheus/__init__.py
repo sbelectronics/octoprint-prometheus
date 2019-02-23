@@ -17,7 +17,7 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
 
         def on_after_startup(self):
             self._logger.info("Starting Prometheus! (port: %s)" % self._settings.get(["prometheus_port"]))
-            start_http_server(self._settings.get(["prometheus_port"]))
+            start_http_server(int(self._settings.get(["prometheus_port"])))
                 
         def get_settings_defaults(self):
             return dict(prometheus_port=8000)
