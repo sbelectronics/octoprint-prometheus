@@ -1,11 +1,19 @@
 # coding=utf-8
+
+""" Octoprint-Prometheus
+    Scott Baker, http://www.smbaker.com/
+
+    This is an Octoprint plugin that exposes a Prometheus client endpoint, allowing printer statistics to be
+    collected by Prometheus and view in Grafana.
+"""
+
 from __future__ import absolute_import
 
-import os
-from prometheus_client import Gauge, start_http_server
+from prometheus_client import Counter, Enum, Gauge, Info, start_http_server
 import octoprint.plugin
 
 from .gcodeparser import Gcode_parser
+
 
 class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                        octoprint.plugin.SettingsPlugin,
@@ -13,10 +21,32 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                        octoprint.plugin.ProgressPlugin,
                        octoprint.plugin.EventHandlerPlugin):
 
+        DESCRIPTIONS = {"temperature_bed_actual": "Actual Temperature in Celsius of Bed",
+                        "temperature_bed__target": "Target Temperature in Celsius of Bed",
+                        "temperature_tool0_actual": "Actual Temperature in Celsius of Extruder Hot End",
+                        "temperature_tool0__target": "Target Temperature in Celsius of Extruder Hot End",
+                        "movement_x": "Movement of X axis from G0 or G1 gcode",
+                        "movement_y": "Movement of Y axis from G0 or G1 gcode",
+                        "movement_z": "Movement of Z axis from G0 or G1 gcode",
+                        "movement_e": "Movement of Extruder from G0 or G1 gcode",
+                        "movement_speed": "Speed setting from G0 or G1 gcode",
+                        "extrusion_print": "Filament extruded this print",
+                        "extrusion_total": "Filament extruded total",
+                        "progress": "Progress percentage of print",
+                        "printing": "1 if printing, 0 otherwise",
+                        "print_info": "Filename information about print",
+                        }
+
         def __init__(self, *args, **kwargs):
             super(PrometheusPlugin, self).__init__(*args, **kwargs)
             self.parser = Gcode_parser()
-            self.gauges = {}
+            self.gauges = {}  # holds gauges, counters, infos, and enums
+            self.last_extrusion_counter = 0
+
+            self.gauges["printer_state"] = Enum("printer_state",
+                                                "State of printer",
+                                                states=["init", "printing", "done", "failed", "cancelled"])
+            self.gauges["printer_state"].state("init")
 
         def on_after_startup(self):
             self._logger.info("Starting Prometheus! (port: %s)" % self._settings.get(["prometheus_port"]))
@@ -32,7 +62,17 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
 
         def get_gauge(self, name):
                 if name not in self.gauges:
-                    self.gauges[name] = Gauge(name, name)
+                    self.gauges[name] = Gauge(name, self.DESCRIPTIONS.get(name, name))
+                return self.gauges[name]
+
+        def get_counter(self, name):
+                if name not in self.gauges:
+                    self.gauges[name] = Counter(name, self.DESCRIPTIONS.get(name, name))
+                return self.gauges[name]
+
+        def get_info(self, name):
+                if name not in self.gauges:
+                    self.gauges[name] = Info(name, self.DESCRIPTIONS.get(name, name))
                 return self.gauges[name]
         
         def on_print_progress(self, storage, path, progress):
@@ -40,12 +80,28 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                 gauge.set(progress)
         
         def on_event(self, event, payload):
-                if (event == "ZChange"):
+                if event == "ZChange":
+                    # TODO: This doesn't seem useful...
                     gauge = self.get_gauge("zchange")
                     gauge.set(payload["new"])
-                if (event == "PrintStarted"):
+                elif event == "PrintStarted":
                     # reset the extrusion counter
                     self.parser.reset()
+                    self.get_gauge("printing").set(1)
+                    self.get_gauge("printer_state").state("printing")
+                    self.get_info("print_info").info({"name": payload.get("name", ""),
+                                                      "path": payload.get("path", ""),
+                                                      "origin": payload.get("origin", "")})
+                elif event == "PrintFailed":
+                    self.get_gauge("printing").set(0)
+                    self.get_gague("printer_state").state("failed")
+                elif event == "PrintDone":
+                    self.get_gauge("printing").set(0)
+                    self.get_gague("printer_state").state("done")
+                elif event == "PrintCancelled":
+                    self.get_gauge("printing").set(0)
+                    self.get_gague("printer_state").state("cancelled")
+
                 """
                 # This was my first attempt at measuring positions and extrusions. 
                 # Didn't work the way I expected.
@@ -60,38 +116,46 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
 
         def gcodephase_hook(self, comm_instance, phase, cmd, cmd_type, gcode, subcode=None, tags=None, *args, **kwargs):
             if phase == "sent":
-                #self._logger.info("gcodephasehook: cmd=%s gcode=%s, subcode=%s tags=%s args=%s kwargs=%s" % (cmd, gcode, subcode, tags, args, kwargs))
                 if self.parser.process_line(cmd):
                     for k in ["x", "y", "z", "e", "speed"]:
                         v = getattr(self.parser, k)
                         if v is not None:
                             gauge = self.get_gauge("movement_" + k)
                             gauge.set(v)
-                    gauge = self.get_gauge("extrustion_counter")
+
+                    # extrusion_print is modeled as a gauge so we can reset it after every print
+                    gauge = self.get_gauge("extrusion_print")
                     gauge.set(self.parser.extrusion_counter)
-            return None # no change
+
+                    if self.parser.extrusion_counter > self.last_extrusion_counter:
+                        # extrusion_total is monotonically increasing for the lifetime of the plugin
+                        counter = self.get_counter("extrusion_total")
+                        counter.inc(self.parser.extrusion_counter - self.last_extrusion_counter)
+                        self.last_extrusion_counter = self.parser.extrusion_counter
+
+            return None  # no change
 
         def temperatures_handler(self, comm, parsed_temps):
-            for (k,v) in parsed_temps.items():
+            for (k, v) in parsed_temps.items():
                 mapname = {"B": "temperature_bed",
                            "T0": "temperature_tool0",
                            "T1": "temperature_tool1",
                            "T2": "temperature_tool2",
                            "T3": "temperature_tool3"}
 
-                k_actual = mapname.get(k,k) + "_actual"
+                k_actual = mapname.get(k, k) + "_actual"
                 gauge = self.get_gauge(k_actual)
                 try:
                     gauge.set(v[0])
                 except TypeError:
-                    pass # not an integer or float
+                    pass  # not an integer or float
 
-                k_target = mapname.get(k,k) + "_target"
+                k_target = mapname.get(k, k) + "_target"
                 gauge = self.get_gauge(k_target)
                 try:
                     gauge.set(v[1])
                 except TypeError:
-                    pass # not an integer or float
+                    pass  # not an integer or float
 
             return parsed_temps
         
