@@ -15,6 +15,19 @@ It will also monitor several built in prometheus python client variables, such a
 
 The reason I chose to do this is I already have Prometheus/Grafana for monitoring the environment in my office. Having OctoPrint data available lets me keep track of printer utilization using the same toolchain, and to correlate printer usage with environmental changes.
 
+## Dependencies ##
+
+This package depends upon `prometheus_client`, which should be automatically installed as necessary by pip. 
+
+## Installation ##
+
+Either of the following commands can be used to install the package from the command line:
+
+* `pip install octoprint-prometheus`
+* `pip install https://github.com/sbelectronics/octoprint-prometheus/archive/master.zip`
+
+Additionally, you can install this using the Octoprint GUI by using Plugin Manager --> Get More --> from URL, and entering the URL `https://github.com/sbelectronics/octoprint-prometheus/archive/master.zip`.
+
 ## Configuration ##
 
 The printer by default exposes an endpoint on port 8000. This port may be changed using the plugin's setup page in the OctoPrint UI.
