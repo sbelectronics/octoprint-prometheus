@@ -9,6 +9,7 @@
 
 from __future__ import absolute_import
 
+from threading import Timer
 from prometheus_client import Counter, Enum, Gauge, Info, start_http_server
 import octoprint.plugin
 
@@ -34,7 +35,7 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                         "extrusion_total": "Filament extruded total",
                         "progress": "Progress percentage of print",
                         "printing": "1 if printing, 0 otherwise",
-                        "print_info": "Filename information about print",
+                        "print": "Filename information about print",
                         }
 
         def __init__(self, *args, **kwargs):
@@ -42,10 +43,11 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
             self.parser = Gcode_parser()
             self.gauges = {}  # holds gauges, counters, infos, and enums
             self.last_extrusion_counter = 0
+            self.completion_timer = None
 
             self.gauges["printer_state"] = Enum("printer_state",
                                                 "State of printer",
-                                                states=["init", "printing", "done", "failed", "cancelled"])
+                                                states=["init", "printing", "done", "failed", "cancelled", "idle"])
             self.gauges["printer_state"].state("init")
 
         def on_after_startup(self):
@@ -78,30 +80,52 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
         def on_print_progress(self, storage, path, progress):
                 gauge = self.get_gauge("progress")
                 gauge.set(progress)
-        
+
+        def print_complete_callback(self):
+            self.get_gauge("printer_state").state("idle")
+            self.get_gauge("progress").set(0)
+            self.get_gauge("extrusion_print").set(0)
+            self.get_gauge("print_info").info({})
+            self.completion_timer = None
+
+        def print_complete(self, reason):
+            self.get_gauge("printer_state").state(reason)
+            self.get_gauge("printing").set(0)  # TODO: may be redundant with printer_state
+
+            # In 30 seconds, reset all the progress variables back to 0
+            # At a default 10 second interval, this gives us plenty of room for Prometheus to capture the 100%
+            # complete gauge.
+
+            # TODO: Is this really a good idea?
+
+            self.completion_timer = Timer(30, self.print_complete_callback)
+            self.completion_timer.start()
+
         def on_event(self, event, payload):
                 if event == "ZChange":
                     # TODO: This doesn't seem useful...
                     gauge = self.get_gauge("zchange")
                     gauge.set(payload["new"])
                 elif event == "PrintStarted":
+                    # If there's a completion timer running, kill it.
+                    if self.completion_timer:
+                        self.completion_timer.cancel()
+                        self.completion_timer = None
+
                     # reset the extrusion counter
                     self.parser.reset()
                     self.last_extrusion_counter = 0
                     self.get_gauge("printing").set(1)  # TODO: may be redundant with printer_state
                     self.get_gauge("printer_state").state("printing")
-                    self.get_info("print_info").info({"name": payload.get("name", ""),
-                                                      "path": payload.get("path", ""),
-                                                      "origin": payload.get("origin", "")})
+                    self.get_info("print").info({"name": payload.get("name", ""),
+                                                 "path": payload.get("path", ""),
+                                                 "origin": payload.get("origin", "")})
                 elif event == "PrintFailed":
-                    self.get_gauge("printing").set(0)  # TODO: may be redundant with printer_state
-                    self.get_gauge("printer_state").state("failed")
+                    self.print_complete("failed")
                 elif event == "PrintDone":
-                    self.get_gauge("printing").set(0)  # TODO: may be redundant with printer_state
-                    self.get_gauge("printer_state").state("done")
+                    self.print_complete("done")
                 elif event == "PrintCancelled":
-                    self.get_gauge("printing").set(0)  # TODO: may be redundant with printer_state
-                    self.get_gauge("printer_state").state("cancelled")
+                    self.print_complete("cancelled")
 
                 """
                 # This was my first attempt at measuring positions and extrusions. 
