@@ -5,6 +5,13 @@
 
     This is an Octoprint plugin that exposes a Prometheus client endpoint, allowing printer statistics to be
     collected by Prometheus and view in Grafana.
+
+    Development notes:
+       # Sourcing the oprint environment on the pi for development.
+       source ~/oprint/bin/activate
+
+       # Find octoprint logs here
+       tail -f /home/pi/.octoprint/logs/octoprint.log
 """
 
 from __future__ import absolute_import
@@ -50,6 +57,30 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                                                 states=["init", "printing", "done", "failed", "cancelled", "idle"])
             self.gauges["printer_state"].state("init")
 
+            self.init_gauge("progress")
+            self.init_gauge("extrusion_print")
+            self.init_gauge("printing")
+            self.init_gauge("zchange")
+            self.init_gauge("movement_x")
+            self.init_gauge("movement_y")
+            self.init_gauge("movement_z")
+            self.init_gauge("movement_e")
+            self.init_gauge("movement_speed")
+            self.init_gauge("temperature_bed_actual")
+            self.init_gauge("temperature_bed_target")
+            self.init_gauge("temperature_tool0_actual")
+            self.init_gauge("temperature_tool0_target")
+            self.init_gauge("temperature_tool1_actual")
+            self.init_gauge("temperature_tool1_target")
+            self.init_gauge("temperature_tool2_actual")
+            self.init_gauge("temperature_tool2_target")
+            self.init_gauge("temperature_tool3_actual")
+            self.init_gauge("temperature_tool3_target")
+
+            self.init_counter("extrusion_total")
+
+            self.init_info("print")
+
         def on_after_startup(self):
             self._logger.info("Starting Prometheus! (port: %s)" % self._settings.get(["prometheus_port"]))
             start_http_server(int(self._settings.get(["prometheus_port"])))
@@ -62,21 +93,18 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                 dict(type="settings", custom_bindings=False)
             ]
 
+        def init_gauge(self, name):
+            self.gauges[name] = Gauge(name, self.DESCRIPTIONS.get(name, name))
+
+        def init_counter(self, name):
+            self.gauges[name] = Counter(name, self.DESCRIPTIONS.get(name, name))
+
+        def init_info(self, name):
+            self.gauges[name] = Info(name, self.DESCRIPTIONS.get(name, name))
+
         def get_gauge(self, name):
-                if name not in self.gauges:
-                    self.gauges[name] = Gauge(name, self.DESCRIPTIONS.get(name, name))
-                return self.gauges[name]
+            return self.gauges[name]
 
-        def get_counter(self, name):
-                if name not in self.gauges:
-                    self.gauges[name] = Counter(name, self.DESCRIPTIONS.get(name, name))
-                return self.gauges[name]
-
-        def get_info(self, name):
-                if name not in self.gauges:
-                    self.gauges[name] = Info(name, self.DESCRIPTIONS.get(name, name))
-                return self.gauges[name]
-        
         def on_print_progress(self, storage, path, progress):
                 gauge = self.get_gauge("progress")
                 gauge.set(progress)
@@ -85,7 +113,7 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
             self.get_gauge("printer_state").state("idle")
             self.get_gauge("progress").set(0)
             self.get_gauge("extrusion_print").set(0)
-            self.get_gauge("print_info").info({})   # This doesn't actually cause it to reset...
+            self.get_gauge("print").info({})   # This doesn't actually cause it to reset...
             self.completion_timer = None
 
         def print_complete(self, reason):
@@ -117,9 +145,9 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                     self.last_extrusion_counter = 0
                     self.get_gauge("printing").set(1)  # TODO: may be redundant with printer_state
                     self.get_gauge("printer_state").state("printing")
-                    self.get_info("print").info({"name": payload.get("name", ""),
-                                                 "path": payload.get("path", ""),
-                                                 "origin": payload.get("origin", "")})
+                    self.get_gauge("print").info({"name": payload.get("name", ""),
+                                                  "path": payload.get("path", ""),
+                                                  "origin": payload.get("origin", "")})
                 elif event == "PrintFailed":
                     self.print_complete("failed")
                 elif event == "PrintDone":
@@ -154,7 +182,7 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
 
                     if self.parser.extrusion_counter > self.last_extrusion_counter:
                         # extrusion_total is monotonically increasing for the lifetime of the plugin
-                        counter = self.get_counter("extrusion_total")
+                        counter = self.get_gauge("extrusion_total")
                         counter.inc(self.parser.extrusion_counter - self.last_extrusion_counter)
                         self.last_extrusion_counter = self.parser.extrusion_counter
 
@@ -167,6 +195,11 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                            "T1": "temperature_tool1",
                            "T2": "temperature_tool2",
                            "T3": "temperature_tool3"}
+
+                # We only support four tools. If someone runs into a printer with more tools, please
+                # let me know...
+                if k not in mapname:
+                    continue
 
                 k_actual = mapname.get(k, k) + "_actual"
                 gauge = self.get_gauge(k_actual)
