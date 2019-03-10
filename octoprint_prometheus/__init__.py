@@ -12,6 +12,16 @@
 
        # Find octoprint logs here
        tail -f /home/pi/.octoprint/logs/octoprint.log
+
+       # Uninstall and cleanup
+       pip uninstall octoprint-prometheus
+       rm -rf /home/pi/oprint/local/lib/python2.7/site-packages/octoprint_prometheus*
+
+       # Upload to pypi
+       rm -rf dist
+       python setup.py sdist bdist_wheel
+       twine upload dist/*
+
 """
 
 from __future__ import absolute_import
