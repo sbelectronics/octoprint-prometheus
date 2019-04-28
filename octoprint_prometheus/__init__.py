@@ -86,6 +86,7 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
             self.init_gauge("temperature_tool2_target")
             self.init_gauge("temperature_tool3_actual")
             self.init_gauge("temperature_tool3_target")
+            self.init_gauge("print_fan_speed")
 
             self.init_counter("extrusion_total")
 
@@ -179,7 +180,8 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
 
         def gcodephase_hook(self, comm_instance, phase, cmd, cmd_type, gcode, subcode=None, tags=None, *args, **kwargs):
             if phase == "sent":
-                if self.parser.process_line(cmd):
+                parse_result = self.parser.process_line(cmd)
+                if parse_result == "movement":
                     for k in ["x", "y", "z", "e", "speed"]:
                         v = getattr(self.parser, k)
                         if v is not None:
@@ -195,6 +197,12 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                         counter = self.get_gauge("extrusion_total")
                         counter.inc(self.parser.extrusion_counter - self.last_extrusion_counter)
                         self.last_extrusion_counter = self.parser.extrusion_counter
+
+                elif parse_result == "print_fan_speed":
+                    v = getattr(self.parser, "print_fan_speed")
+                    if v is not None:
+                        gauge = self.get_gauge("print_fan_speed")
+                        gauge.set(v)
 
             return None  # no change
 
@@ -226,7 +234,7 @@ class PrometheusPlugin(octoprint.plugin.StartupPlugin,
                     pass  # not an integer or float
 
             return parsed_temps
-        
+
 
 def __plugin_load__():
         plugin = PrometheusPlugin()
